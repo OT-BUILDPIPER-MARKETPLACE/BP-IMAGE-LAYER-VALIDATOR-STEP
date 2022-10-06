@@ -1,6 +1,8 @@
 #!/bin/bash
 source functions.sh
 
+COMPONENT_NAME=`getComponentName`
+BUILD_REPOSITORY_TAG=`getRepositoryTag`
 logInfoMessage "I'll check the docker image layers for ${COMPONENT_NAME} of tag ${BUILD_REPOSITORY_TAG}"
 sleep  $SLEEP_DURATION
 
