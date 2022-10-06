@@ -1,7 +1,4 @@
 [submodule "BP-BASE-SHELL-STEPS"]
 	path = BP-BASE-SHELL-STEPS
 	url = https://github.com/OT-BUILDPIPER-MARKETPLACE/BP-BASE-SHELL-STEPS.git
-	branch = main
-
-[submodule "IMAGE-TAG"]
-	path = IMAGE_TAG/function.sh
+	branch = build-meta-info
