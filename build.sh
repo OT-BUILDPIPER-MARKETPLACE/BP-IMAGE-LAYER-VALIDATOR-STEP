@@ -1,8 +1,6 @@
 #!/bin/bash
 source functions.sh
-
-COMPONENT_NAME=`cat /bp/data/environment_build | jq -r .build_detail.repository.name`
-BUILD_REPOSITORY_TAG=`cat /bp/data/environment_build | jq -r .build_detail.repository.tag`
+source function.sh
 
 echo "I'll check the docker image layers for ${COMPONENT_NAME} of tag ${BUILD_REPOSITORY_TAG}"
 sleep  $SLEEP_DURATION
@@ -10,8 +8,15 @@ sleep  $SLEEP_DURATION
 LAYERS=$(docker inspect ${COMPONENT_NAME}:${BUILD_REPOSITORY_TAG} | jq .[].RootFS.Layers | wc -l)
 IMAGE_LAYER=$(expr $LAYERS - 2)
 
-echo "Number of Layers in image are $IMAGE_LAYER"
-echo "Number of Layers are allowed is $MAX_ALLOWED_IMAGE_LAYERS"
+function logInfoMessage() {
+    $MESSAGE="Number of Layers in image are $IMAGE_LAYER"
+    $MESSAGE1="Number of Layers are allowed is $MAX_ALLOWED_IMAGE_LAYERS"
+    CURRENT_DATE=`date "+%D: %T"`
+    echo "[$CURRENT_DATE] [INFO] $MESSAGE"
+    echo "[$CURRENT_DATE] [INFO] $MESSAGE1"
+}
+
+logInfoMessage 
 
 if [[ $IMAGE_LAYER -gt $MAX_ALLOWED_IMAGE_LAYERS ]]
 then
