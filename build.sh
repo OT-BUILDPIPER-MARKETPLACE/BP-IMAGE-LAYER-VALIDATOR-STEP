@@ -6,8 +6,6 @@ BUILD_REPOSITORY_TAG=`getRepositoryTag`
 logInfoMessage "I'll check the docker image layers for ${COMPONENT_NAME} of tag ${BUILD_REPOSITORY_TAG}"
 sleep  $SLEEP_DURATION
 
-$VALIDATION_FAILURE_ACTION
-
 LAYERS=$(docker inspect ${COMPONENT_NAME}:${BUILD_REPOSITORY_TAG} | jq .[].RootFS.Layers | wc -l)
 IMAGE_LAYER=$(expr $LAYERS - 2)
 
