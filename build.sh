@@ -1,5 +1,10 @@
 #!/bin/bash
-source functions.sh
+
+source /opt/buildpiper/shell-functions/functions.sh
+source /opt/buildpiper/shell-functions/log-functions.sh
+source /opt/buildpiper/shell-functions/str-functions.sh
+source /opt/buildpiper/shell-functions/file-functions.sh
+source /opt/buildpiper/shell-functions/aws-functions.sh
 
 COMPONENT_NAME=`getComponentName`
 BUILD_REPOSITORY_TAG=`getRepositoryTag`
