@@ -36,6 +36,7 @@ RUN chmod +x /home/buildpiper/build.sh && \
 
 USER buildpiper
 
+WORKDIR /home/buildpiper
 
 ENV MAX_ALLOWED_IMAGE_LAYERS 10 
 ENV SLEEP_DURATION 5s
@@ -44,4 +45,3 @@ ENV COMPONENT_NAME BUILD_REPOSITORY_TAG
 ENV ACTIVITY_SUB_TASK_CODE IMAGE_LAYER_VALIDATOR
 
 ENTRYPOINT [ "./build.sh" ]
-
