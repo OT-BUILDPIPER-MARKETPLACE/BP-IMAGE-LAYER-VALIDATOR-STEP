@@ -5,6 +5,7 @@ source /opt/buildpiper/shell-functions/log-functions.sh
 source /opt/buildpiper/shell-functions/str-functions.sh
 source /opt/buildpiper/shell-functions/file-functions.sh
 source /opt/buildpiper/shell-functions/aws-functions.sh
+source ./login.sh
 
 COMPONENT_NAME=`getComponentName`
 BUILD_REPOSITORY_TAG=`getRepositoryTag`
@@ -16,7 +17,10 @@ if docker image inspect "$IMAGE" >/dev/null 2>&1; then
     logInfoMessage " Image found locally: $IMAGE"
 else
     logWarningMessage "Image not found locally. Pulling $IMAGE"
+    logInfoMessage "Logging into configured registries"
+    login_all_registries
     docker pull "$IMAGE"
+    logInfoMessage "Image successful pull $IMAGE"
     if [[ $? -ne 0 ]]; then
         logErrorMessage "Failed to pull image: $IMAGE"
         exit 1
