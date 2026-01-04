@@ -1,6 +1,5 @@
 FROM alpine
 
-
 RUN apk update && \
     apk add --no-cache --upgrade \
         bash \
@@ -28,6 +27,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV DOCKER_CONFIG=/tmp/.docker
 RUN mkdir -p /tmp/.docker && chmod 700 /tmp/.docker
 
+
 RUN mkdir -p \
         /src/reports \
         /bp/data \
@@ -48,12 +48,13 @@ RUN chmod +x /home/buildpiper/build.sh && \
 
 USER buildpiper
 
+ENV INFRACOST_API_KEY xxxx
+
 WORKDIR /home/buildpiper
 
-ENV MAX_ALLOWED_IMAGE_LAYERS 10 
 ENV SLEEP_DURATION 5s
+ENV MAX_ALLOWED_IMAGE_SIZE 180
 ENV VALIDATION_FAILURE_ACTION FAILURE
-ENV COMPONENT_NAME BUILD_REPOSITORY_TAG
-ENV ACTIVITY_SUB_TASK_CODE IMAGE_LAYER_VALIDATOR
+ENV ACTIVITY_SUB_TASK_CODE IMAGE_SIZE_VALIDATOR
 
 ENTRYPOINT [ "./build.sh" ]
