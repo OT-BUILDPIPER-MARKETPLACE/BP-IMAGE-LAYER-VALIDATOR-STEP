@@ -7,9 +7,6 @@ source /opt/buildpiper/shell-functions/file-functions.sh
 source /opt/buildpiper/shell-functions/aws-functions.sh
 source ./login.sh
 
-# Ensure step name exists (VERY IMPORTANT)
-ACTIVITY_SUB_TASK_CODE="${ACTIVITY_SUB_TASK_CODE:-image_layer_validator}"
-
 COMPONENT_NAME=`getComponentName`
 BUILD_REPOSITORY_TAG=`getRepositoryTag`
 IMAGE="${COMPONENT_NAME}:${BUILD_REPOSITORY_TAG}"
