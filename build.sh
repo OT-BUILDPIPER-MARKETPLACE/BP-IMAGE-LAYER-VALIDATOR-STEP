@@ -7,6 +7,8 @@ source /opt/buildpiper/shell-functions/file-functions.sh
 source /opt/buildpiper/shell-functions/aws-functions.sh
 source ./login.sh
 
+export ACTIVITY_SUB_TASK_CODE="image_layer_validator"
+
 COMPONENT_NAME=`getComponentName`
 BUILD_REPOSITORY_TAG=`getRepositoryTag`
 IMAGE="${COMPONENT_NAME}:${BUILD_REPOSITORY_TAG}"
