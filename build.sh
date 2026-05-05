@@ -7,19 +7,6 @@ source /opt/buildpiper/shell-functions/file-functions.sh
 source /opt/buildpiper/shell-functions/aws-functions.sh
 source ./login.sh
 
-# Override AFTER sourcing
-logInfoMessage() {
-    echo "[INFO] $1"
-}
-
-logErrorMessage() {
-    echo "[ERROR] $1"
-}
-
-logWarningMessage() {
-    echo "[WARNING] $1"
-}
-
 export ACTIVITY_SUB_TASK_CODE="image_layer_validator"
 
 COMPONENT_NAME=`getComponentName`
