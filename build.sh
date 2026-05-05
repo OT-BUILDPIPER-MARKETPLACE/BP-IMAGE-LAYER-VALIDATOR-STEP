@@ -7,84 +7,127 @@ source /opt/buildpiper/shell-functions/file-functions.sh
 source /opt/buildpiper/shell-functions/aws-functions.sh
 source ./login.sh
 
-export ACTIVITY_SUB_TASK_CODE="image_layer_validator"
+# ---------------------------------------------------------------
+# NOTE: ACTIVITY_SUB_TASK_CODE is managed by the BuildPiper
+#       environment. Do NOT override it here to ensure events
+#       appear correctly in the UI.
+# ---------------------------------------------------------------
 
-COMPONENT_NAME=`getComponentName`
-BUILD_REPOSITORY_TAG=`getRepositoryTag`
+COMPONENT_NAME=$(getComponentName)
+BUILD_REPOSITORY_TAG=$(getRepositoryTag)
 IMAGE="${COMPONENT_NAME}:${BUILD_REPOSITORY_TAG}"
 
-# Event for checking local image
-add_event "IMAGE SEARCH" "Successful" \
-            "Checking local availability" \
-            "Image: $IMAGE"
+# ---------------------------------------------------------------
+# 1. Initialization
+# ---------------------------------------------------------------
+logInfoMessage "> Starting step: image_layer_validator"
+logInfoMessage "> Target image : ${IMAGE}"
+logInfoMessage "> Max allowed  : ${MAX_ALLOWED_IMAGE_LAYERS} layers"
 
-logInfoMessage "I'll check the docker image layers for ${COMPONENT_NAME} of tag ${BUILD_REPOSITORY_TAG}"
-sleep  $SLEEP_DURATION
+add_event "INITIALIZATION" "Successful" \
+    "Image layer validation initialized" \
+    "Image: ${IMAGE} | Max allowed: ${MAX_ALLOWED_IMAGE_LAYERS} layers"
 
-if docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    logInfoMessage " Image found locally: $IMAGE"
+sleep "$SLEEP_DURATION"
+
+# ---------------------------------------------------------------
+# 2. Image Availability Check
+# ---------------------------------------------------------------
+logInfoMessage "> Checking if image is available locally..."
+
+if docker image inspect "$IMAGE" > /dev/null 2>&1; then
+    logInfoMessage "> Image found locally: ${IMAGE}"
+    add_event "IMAGE_AVAILABILITY" "Successful" \
+        "Image found in local Docker cache" \
+        "Image: ${IMAGE}"
 else
-    logWarningMessage "Image not found locally. Pulling $IMAGE"
-    logInfoMessage "Logging into configured registries"
-    
-    # Event for pulling image
-    add_event "IMAGE PULL INITIATED" "Successful" \
-                "Image not found locally" \
-                "Pulling $IMAGE from registry"
+    logWarningMessage "> Image not found locally. Initiating pull..."
+    logInfoMessage "> Logging into configured registries"
+
+    add_event "IMAGE_PULL_INITIATED" "Successful" \
+        "Image not found locally — pulling from registry" \
+        "Image: ${IMAGE}"
 
     login_all_registries
     docker pull "$IMAGE"
-    
+
     if [[ $? -ne 0 ]]; then
-        # Event for pull failure
-        add_event "IMAGE PULL FAILED" "Failed" \
-                    "Failed to pull image: $IMAGE" \
-                    "Check registry login or network"
-        logErrorMessage "Failed to pull image: $IMAGE"
+        logErrorMessage "> Failed to pull image ${IMAGE} from registry."
+        add_event "IMAGE_PULL_FAILED" "Failed" \
+            "Could not pull image from registry" \
+            "Image: ${IMAGE} | Verify auth, tag, and network connectivity"
+        saveTaskStatus 1 "${ACTIVITY_SUB_TASK_CODE}"
         exit 1
     fi
-    
-    # Event for pull success
-    add_event "IMAGE PULL SUCCESS" "Successful" \
-                "Image successful pull" \
-                "Image: $IMAGE"
-    logInfoMessage "Image successful pull $IMAGE"
+
+    logInfoMessage "> Successfully pulled image: ${IMAGE}"
+    add_event "IMAGE_PULL_COMPLETE" "Successful" \
+        "Image pulled successfully from registry" \
+        "Image: ${IMAGE}"
 fi
 
-# Cleaner way to get layer count
+# ---------------------------------------------------------------
+# 3. Layer Inspection
+# ---------------------------------------------------------------
+logInfoMessage "> Inspecting image layer count..."
+
 IMAGE_LAYER=$(docker inspect "${IMAGE}" | jq '.[0].RootFS.Layers | length')
 
-logInfoMessage "Number of Layers in image are $IMAGE_LAYER"
-logInfoMessage "Number of Layers are allowed is $MAX_ALLOWED_IMAGE_LAYERS"
+echo ""
+echo "> Image Layer Inspection Summary"
+printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
+printf '| %-28s | %-48s |\n' "Parameter" "Value"
+printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
+printf '| %-28s | %-48s |\n' "Image" "${IMAGE}"
+printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
+printf '| %-28s | %-48s |\n' "Actual Layer Count" "${IMAGE_LAYER}"
+printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
+printf '| %-28s | %-48s |\n' "Max Allowed Layers" "${MAX_ALLOWED_IMAGE_LAYERS}"
+printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
+printf '| %-28s | %-48s |\n' "Utilization" "$((IMAGE_LAYER * 100 / MAX_ALLOWED_IMAGE_LAYERS))% of limit"
+printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
+echo ""
 
-if [[ $IMAGE_LAYER -gt $MAX_ALLOWED_IMAGE_LAYERS ]]
-then
-    generateOutput "$ACTIVITY_SUB_TASK_CODE" false "Build failed please check!!!!!"
-   if [[ $VALIDATION_FAILURE_ACTION == "FAILURE" ]]
-   then
-        # Event for blocking failure
-        add_event "LAYER LIMIT EXCEEDED" "Failed" \
-                    "Build failed: $IMAGE_LAYER layers exceeds $MAX_ALLOWED_IMAGE_LAYERS" \
-                    "Optimization required for $IMAGE"
-        logErrorMessage "Number of layers are more then expected layers count"
-        logErrorMessage "build unsucessfull"
+logInfoMessage "> Image layer count : ${IMAGE_LAYER}"
+logInfoMessage "> Allowed layer count: ${MAX_ALLOWED_IMAGE_LAYERS}"
+logInfoMessage "> Utilization        : $((IMAGE_LAYER * 100 / MAX_ALLOWED_IMAGE_LAYERS))% of allowed limit"
+
+# ---------------------------------------------------------------
+# 4. Validation Result
+# ---------------------------------------------------------------
+if [[ "${IMAGE_LAYER}" -gt "${MAX_ALLOWED_IMAGE_LAYERS}" ]]; then
+
+    logWarningMessage "> Image has ${IMAGE_LAYER} layers which exceeds the configured limit of ${MAX_ALLOWED_IMAGE_LAYERS}"
+
+    generateOutput image_layer_validator false \
+        "Image layer validation failed. Current layers: ${IMAGE_LAYER} exceeds allowed limit: ${MAX_ALLOWED_IMAGE_LAYERS}. Consider squashing layers or reducing RUN statements in your Dockerfile."
+
+    if [[ "$VALIDATION_FAILURE_ACTION" == "FAILURE" ]]; then
+        logErrorMessage "> Action: Blocking build (VALIDATION_FAILURE_ACTION=FAILURE)"
+        add_event "LAYER_LIMIT_EXCEEDED" "Failed" \
+            "Image has ${IMAGE_LAYER} layers — exceeds limit of ${MAX_ALLOWED_IMAGE_LAYERS} — build blocked" \
+            "Image: ${IMAGE} | Action: FAILURE | Squash layers or reduce RUN steps to proceed"
+        saveTaskStatus 1 "${ACTIVITY_SUB_TASK_CODE}"
         exit 1
-   else
-        # Event for non-blocking warning
-        add_event "LAYER LIMIT WARNING" "Warning" \
-                    "Layer count $IMAGE_LAYER is high" \
-                    "Proceeding as per VALIDATION_FAILURE_ACTION"
-        logWarningMessage "Number of layers are more then expected layers count please check!!!!!"
-   fi
+    else
+        logWarningMessage "> Action: Proceeding with warning (VALIDATION_FAILURE_ACTION=${VALIDATION_FAILURE_ACTION})"
+        add_event "LAYER_LIMIT_EXCEEDED_WARNING" "Warning" \
+            "Image has ${IMAGE_LAYER} layers — exceeds limit but build is allowed to continue" \
+            "Image: ${IMAGE} | Action: ${VALIDATION_FAILURE_ACTION} | Review Dockerfile layer optimization"
+    fi
+
 else
-        # Event for success
-        add_event "LAYER LIMIT PASSED" "Successful" \
-                    "Image layer count is under limit" \
-                    "Count: $IMAGE_LAYER | Limit: $MAX_ALLOWED_IMAGE_LAYERS"
-        generateOutput "$ACTIVITY_SUB_TASK_CODE" true "Congratulations build succeeded!!!"
-        logInfoMessage "Number of layers in docker image is  under expected layers count"
-        logInfoMessage "build sucessfull"
+    logInfoMessage "> Validation passed: ${IMAGE_LAYER} layers is within the ${MAX_ALLOWED_IMAGE_LAYERS} layer limit"
+
+    generateOutput image_layer_validator true \
+        "Image layer validation passed. Image: ${IMAGE} | Layers: ${IMAGE_LAYER} | Build meets defined layer constraints."
+
+    add_event "IMAGE_LAYER_VALIDATION_PASSED" "Successful" \
+        "Image ${IMAGE} layer count validated successfully: ${IMAGE_LAYER} within limit of ${MAX_ALLOWED_IMAGE_LAYERS}" \
+        "Utilization: $((IMAGE_LAYER * 100 / MAX_ALLOWED_IMAGE_LAYERS))% of allowed layers"
+
+    logInfoMessage "> Build successful"
 fi
- 
-TASK_STATUS=$?
-saveTaskStatus ${TASK_STATUS} ${ACTIVITY_SUB_TASK_CODE}
+
+sleep "$SLEEP_DURATION"
+saveTaskStatus 0 "${ACTIVITY_SUB_TASK_CODE}"
