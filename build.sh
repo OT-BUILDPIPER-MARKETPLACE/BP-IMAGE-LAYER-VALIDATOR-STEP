@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+set -euo pipefail
 
 source /opt/buildpiper/shell-functions/functions.sh
 source /opt/buildpiper/shell-functions/log-functions.sh
@@ -8,126 +10,138 @@ source /opt/buildpiper/shell-functions/aws-functions.sh
 source ./login.sh
 
 # ---------------------------------------------------------------
-# NOTE: ACTIVITY_SUB_TASK_CODE is managed by the BuildPiper
-#       environment. Do NOT override it here to ensure events
-#       appear correctly in the UI.
+# 🔧 CONFIG
 # ---------------------------------------------------------------
-
 COMPONENT_NAME=$(getComponentName)
 BUILD_REPOSITORY_TAG=$(getRepositoryTag)
 IMAGE="${COMPONENT_NAME}:${BUILD_REPOSITORY_TAG}"
 
-# ---------------------------------------------------------------
-# 1. Initialization
-# ---------------------------------------------------------------
+MAX_LAYERS="${MAX_ALLOWED_IMAGE_LAYERS:-20}"
+VALIDATION_ACTION="${VALIDATION_FAILURE_ACTION:-FAILURE}"
+
 logInfoMessage "> Starting step: image_layer_validator"
 logInfoMessage "> Target image : ${IMAGE}"
-logInfoMessage "> Max allowed  : ${MAX_ALLOWED_IMAGE_LAYERS} layers"
+logInfoMessage "> Max allowed  : ${MAX_LAYERS} layers"
 
 add_event "INITIALIZATION" "Successful" \
     "Image layer validation initialized" \
-    "Image: ${IMAGE} | Max allowed: ${MAX_ALLOWED_IMAGE_LAYERS} layers"
+    "Image: ${IMAGE} | Max allowed: ${MAX_LAYERS} layers"
 
-sleep "$SLEEP_DURATION"
+sleep "${SLEEP_DURATION:-0}"
 
 # ---------------------------------------------------------------
-# 2. Image Availability Check
+# 🔐 LOGIN
 # ---------------------------------------------------------------
-logInfoMessage "> Checking if image is available locally..."
+logInfoMessage "> Logging into registry"
+login_all_registries
 
-if docker image inspect "$IMAGE" > /dev/null 2>&1; then
-    logInfoMessage "> Image found locally: ${IMAGE}"
-    add_event "IMAGE_AVAILABILITY" "Successful" \
-        "Image found in local Docker cache" \
+# ---------------------------------------------------------------
+# 📦 FETCH MANIFEST
+# ---------------------------------------------------------------
+logInfoMessage "> Fetching image manifest..."
+
+MANIFEST_RAW=$(skopeo inspect --raw "docker://${IMAGE}" 2>/dev/null || true)
+
+if [[ -z "$MANIFEST_RAW" ]]; then
+    logErrorMessage "> Failed to fetch manifest"
+    add_event "IMAGE_FETCH_FAILED" "Failed" \
+        "Could not fetch manifest" \
         "Image: ${IMAGE}"
+    saveTaskStatus 1 "${ACTIVITY_SUB_TASK_CODE}"
+    exit 1
+fi
+
+TOTAL_LAYERS=0
+
+# ---------------------------------------------------------------
+# 🟢 MULTI-ARCH SUPPORT
+# ---------------------------------------------------------------
+if echo "$MANIFEST_RAW" | jq -e '.manifests' >/dev/null 2>&1; then
+    logInfoMessage "> Multi-arch image detected"
+
+    DIGESTS=$(echo "$MANIFEST_RAW" | jq -r '.manifests[].digest')
+
+    for DIGEST in $DIGESTS; do
+        logInfoMessage "> Processing digest: $DIGEST"
+
+        CHILD_MANIFEST=$(skopeo inspect --raw "docker://${IMAGE%@*}@${DIGEST}" 2>/dev/null)
+
+        LAYER_COUNT=$(echo "$CHILD_MANIFEST" | jq '[.layers[]] | length')
+
+        if [[ -z "$LAYER_COUNT" || "$LAYER_COUNT" == "null" ]]; then
+            logWarningMessage "> Skipping invalid manifest for $DIGEST"
+            continue
+        fi
+
+        TOTAL_LAYERS=$((TOTAL_LAYERS + LAYER_COUNT))
+    done
+
+# ---------------------------------------------------------------
+# 🔵 SINGLE ARCH
+# ---------------------------------------------------------------
 else
-    logWarningMessage "> Image not found locally. Initiating pull..."
-    logInfoMessage "> Logging into configured registries"
+    logInfoMessage "> Single-arch image detected"
 
-    add_event "IMAGE_PULL_INITIATED" "Successful" \
-        "Image not found locally — pulling from registry" \
-        "Image: ${IMAGE}"
-
-    login_all_registries
-    docker pull "$IMAGE"
-
-    if [[ $? -ne 0 ]]; then
-        logErrorMessage "> Failed to pull image ${IMAGE} from registry."
-        add_event "IMAGE_PULL_FAILED" "Failed" \
-            "Could not pull image from registry" \
-            "Image: ${IMAGE} | Verify auth, tag, and network connectivity"
-        saveTaskStatus 1 "${ACTIVITY_SUB_TASK_CODE}"
-        exit 1
-    fi
-
-    logInfoMessage "> Successfully pulled image: ${IMAGE}"
-    add_event "IMAGE_PULL_COMPLETE" "Successful" \
-        "Image pulled successfully from registry" \
-        "Image: ${IMAGE}"
+    TOTAL_LAYERS=$(echo "$MANIFEST_RAW" | jq '[.layers[]] | length')
 fi
 
 # ---------------------------------------------------------------
-# 3. Layer Inspection
+# ❌ VALIDATION: LAYER COUNT
 # ---------------------------------------------------------------
-logInfoMessage "> Inspecting image layer count..."
+if [[ -z "$TOTAL_LAYERS" || "$TOTAL_LAYERS" -eq 0 ]]; then
+    logErrorMessage "> Failed to compute layer count"
+    add_event "LAYER_COMPUTE_FAILED" "Failed" \
+        "Unable to compute layer count" \
+        "Image: ${IMAGE}"
+    saveTaskStatus 1 "${ACTIVITY_SUB_TASK_CODE}"
+    exit 1
+fi
 
-IMAGE_LAYER=$(docker inspect "${IMAGE}" | jq '.[0].RootFS.Layers | length')
+UTILIZATION=$((TOTAL_LAYERS * 100 / MAX_LAYERS))
 
+# ---------------------------------------------------------------
+# 📊 OUTPUT
+# ---------------------------------------------------------------
 echo ""
 echo "> Image Layer Inspection Summary"
-printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
-printf '| %-28s | %-48s |\n' "Parameter" "Value"
-printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
 printf '| %-28s | %-48s |\n' "Image" "${IMAGE}"
-printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
-printf '| %-28s | %-48s |\n' "Actual Layer Count" "${IMAGE_LAYER}"
-printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
-printf '| %-28s | %-48s |\n' "Max Allowed Layers" "${MAX_ALLOWED_IMAGE_LAYERS}"
-printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
-printf '| %-28s | %-48s |\n' "Utilization" "$((IMAGE_LAYER * 100 / MAX_ALLOWED_IMAGE_LAYERS))% of limit"
-printf '+%-30s+%-50s+\n' '------------------------------' '--------------------------------------------------'
+printf '| %-28s | %-48s |\n' "Layer Count" "${TOTAL_LAYERS}"
+printf '| %-28s | %-48s |\n' "Max Allowed" "${MAX_LAYERS}"
+printf '| %-28s | %-48s |\n' "Utilization" "${UTILIZATION}%"
 echo ""
 
-logInfoMessage "> Image layer count : ${IMAGE_LAYER}"
-logInfoMessage "> Allowed layer count: ${MAX_ALLOWED_IMAGE_LAYERS}"
-logInfoMessage "> Utilization        : $((IMAGE_LAYER * 100 / MAX_ALLOWED_IMAGE_LAYERS))% of allowed limit"
+add_event "LAYER_FETCH_SUCCESS" "Successful" \
+    "Layer count calculated successfully" \
+    "Image: ${IMAGE} | Layers: ${TOTAL_LAYERS}"
 
 # ---------------------------------------------------------------
-# 4. Validation Result
+# 🚦 VALIDATION
 # ---------------------------------------------------------------
-if [[ "${IMAGE_LAYER}" -gt "${MAX_ALLOWED_IMAGE_LAYERS}" ]]; then
+if [[ "$TOTAL_LAYERS" -gt "$MAX_LAYERS" ]]; then
 
-    logWarningMessage "> Image has ${IMAGE_LAYER} layers which exceeds the configured limit of ${MAX_ALLOWED_IMAGE_LAYERS}"
+    logWarningMessage "> Layer count ${TOTAL_LAYERS} exceeds limit ${MAX_LAYERS}"
 
-    generateOutput image_layer_validator false \
-        "Image layer validation failed. Current layers: ${IMAGE_LAYER} exceeds allowed limit: ${MAX_ALLOWED_IMAGE_LAYERS}. Consider squashing layers or reducing RUN statements in your Dockerfile."
-
-    if [[ "$VALIDATION_FAILURE_ACTION" == "FAILURE" ]]; then
-        logErrorMessage "> Action: Blocking build (VALIDATION_FAILURE_ACTION=FAILURE)"
+    if [[ "$VALIDATION_ACTION" == "FAILURE" ]]; then
         add_event "LAYER_LIMIT_EXCEEDED" "Failed" \
-            "Image has ${IMAGE_LAYER} layers — exceeds limit of ${MAX_ALLOWED_IMAGE_LAYERS} — build blocked" \
-            "Image: ${IMAGE} | Action: FAILURE | Squash layers or reduce RUN steps to proceed"
+            "Image exceeds allowed layer count" \
+            "Image: ${IMAGE} | Layers: ${TOTAL_LAYERS}"
         saveTaskStatus 1 "${ACTIVITY_SUB_TASK_CODE}"
         exit 1
     else
-        logWarningMessage "> Action: Proceeding with warning (VALIDATION_FAILURE_ACTION=${VALIDATION_FAILURE_ACTION})"
         add_event "LAYER_LIMIT_EXCEEDED_WARNING" "Warning" \
-            "Image has ${IMAGE_LAYER} layers — exceeds limit but build is allowed to continue" \
-            "Image: ${IMAGE} | Action: ${VALIDATION_FAILURE_ACTION} | Review Dockerfile layer optimization"
+            "Layer limit exceeded but allowed" \
+            "Image: ${IMAGE}"
     fi
 
 else
-    logInfoMessage "> Validation passed: ${IMAGE_LAYER} layers is within the ${MAX_ALLOWED_IMAGE_LAYERS} layer limit"
-
-    generateOutput image_layer_validator true \
-        "Image layer validation passed. Image: ${IMAGE} | Layers: ${IMAGE_LAYER} | Build meets defined layer constraints."
+    logInfoMessage "> Validation passed"
 
     add_event "IMAGE_LAYER_VALIDATION_PASSED" "Successful" \
-        "Image ${IMAGE} layer count validated successfully: ${IMAGE_LAYER} within limit of ${MAX_ALLOWED_IMAGE_LAYERS}" \
-        "Utilization: $((IMAGE_LAYER * 100 / MAX_ALLOWED_IMAGE_LAYERS))% of allowed layers"
-
-    logInfoMessage "> Build successful"
+        "Layer count within limit" \
+        "Image: ${IMAGE} | Layers: ${TOTAL_LAYERS}"
 fi
 
-sleep "$SLEEP_DURATION"
+# ---------------------------------------------------------------
+# ✅ COMPLETE
+# ---------------------------------------------------------------
 saveTaskStatus 0 "${ACTIVITY_SUB_TASK_CODE}"
