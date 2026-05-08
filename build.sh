@@ -111,7 +111,7 @@ if [[ "${IMAGE_LAYER}" -gt "${MAX_ALLOWED_IMAGE_LAYERS}" ]]; then
         exit 1
     else
         logWarningMessage "> Action: Proceeding with warning (VALIDATION_FAILURE_ACTION=${VALIDATION_FAILURE_ACTION})"
-        add_event "LAYER_LIMIT_EXCEEDED_WARNING" "Warning" \
+        add_event "LAYER_LIMIT_EXCEEDED_WARNING" "Failed" \
             "Image has ${IMAGE_LAYER} layers — exceeds limit but build is allowed to continue" \
             "Image: ${IMAGE} | Action: ${VALIDATION_FAILURE_ACTION} | Review Dockerfile layer optimization"
     fi
